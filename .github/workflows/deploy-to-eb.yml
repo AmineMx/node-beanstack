@@ -1,0 +1,57 @@
+name: deploy-to-eb
+
+on:
+  push:
+    branches: [dep]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set Node version to 16
+        uses: actions/setup-node@v1
+        with:
+          node-version: "16"
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "::set-output name=dir::$(yarn cache dir)"
+      - uses: actions/cache@v2
+        id: yarn-cache
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      - name: Run yarn install
+        run: |
+          yarn install
+      - name: Clean before ZIP package
+        run: |
+          rm -f .gitignore
+          rm -f .env
+          rm -Rf .git
+          rm -Rf .github
+      - name: Create ZIP deployment package
+        run: zip -r app-node-${{ github.sha }}.zip ./
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.SECRET_ACCESS_KEY }}
+          aws-region: "us-west-1"
+      - name: Upload package to S3 bucket
+        run: aws s3 cp app-node-${{ github.sha }}.zip s3://S3Bucket/
+
+      - name: Create new ElasticBeanstalk Application Version
+        run: |
+          aws elasticbeanstalk create-application-version \
+          --application-name APPLICATION_NAME \
+          --source-bundle S3Bucket="S3Bucket",S3Key="app-node-${{ github.sha }}.zip" \
+          --version-label "ver-${{ github.sha }}" \
+          --description "commit-sha-${{ github.sha }}"
+
+      - name: Deploy new ElasticBeanstalk Application Version
+        run: aws elasticbeanstalk update-environment --environment-name BS_ENV_NAME --version-label "ver-${{ github.sha }}"
